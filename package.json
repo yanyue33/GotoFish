@@ -1,0 +1,33 @@
+{
+  "name": "gotofish",
+  "version": "1.0.0",
+  "private": true,
+  "description": "去钓鱼 — 低多边形 3D 海岛钓鱼休闲游戏（零构建、零运行时依赖）",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "start": "node tools/serve.mjs",
+    "serve": "node tools/serve.mjs",
+    "build:single": "node tools/build-single.mjs",
+    "build:zip": "node tools/build-zip.mjs",
+    "build": "node tools/build-single.mjs && node tools/build-zip.mjs",
+    "test": "node tests/run.mjs",
+    "test:watch": "node --watch tests/run.mjs",
+    "test:e2e": "node tools/e2e.mjs",
+    "test:boot": "node tools/smoke-boot.mjs",
+    "test:single": "node tools/build-single.mjs && node tools/smoke-single.mjs",
+    "check": "node tools/smoke.mjs",
+    "balance": "node tools/balance.mjs",
+    "verify": "node tests/run.mjs && node tools/smoke.mjs && node tools/smoke-boot.mjs && node tools/e2e.mjs && node tools/build-single.mjs && node tools/smoke-single.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "game",
+    "fishing",
+    "threejs",
+    "webgl",
+    "lowpoly"
+  ]
+}

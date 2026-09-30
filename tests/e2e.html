@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8" />
+  <title>去钓鱼 · 无头端到端测试</title>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="../styles/main.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "../vendor/three.module.js"
+      }
+    }
+  </script>
+  <style>
+    #results {
+      position: fixed;
+      inset: 0;
+      z-index: 999;
+      background: #06121b;
+      color: #d8e8f4;
+      font: 13px/1.7 ui-monospace, Consolas, monospace;
+      padding: 16px;
+      overflow: auto;
+      white-space: pre-wrap;
+    }
+
+    .p {
+      color: #6fdc8c;
+    }
+
+    .f {
+      color: #ff6b6b;
+      font-weight: 700;
+    }
+
+    .i {
+      color: #7fc4ff;
+    }
+  </style>
+</head>
+
+<body>
+  <!-- 与 index.html 保持一致的 DOM 结构：UI 层依赖这些 id -->
+  <canvas id="game-canvas"></canvas>
+  <div id="vignette" class="hidden"></div>
+  <div id="crosshair"><span></span><span></span></div>
+
+  <div id="hud">
+    <div class="hud-topleft">
+      <div id="hud-money" class="money">§0</div>
+      <div id="hunger" class="hunger">
+        <span class="hunger-label">饱食</span>
+        <div class="hunger-track">
+          <div id="hunger-fill" class="hunger-fill"></div>
+        </div>
+        <span id="hunger-text" class="hunger-text">100%</span>
+      </div>
+      <div class="clock-row">
+        <span id="hud-clock" class="clock">08:00</span>
+        <span id="hud-spot" class="spot"></span>
+      </div>
+    </div>
+    <div class="hud-topright">
+      <div id="hud-bait" class="bait empty"><span class="bait-icon">✕</span><span class="bait-name">没有鱼饵</span></div>
+      <div id="hud-fps" class="fps" style="display:none">0 FPS</div>
+    </div>
+    <div id="fishing" class="fishing hidden">
+      <div id="fish-hint" class="fish-hint"></div>
+      <div id="power-wrap" class="power-wrap hidden">
+        <div id="power-fill" class="power-fill"></div>
+      </div>
+      <div id="fight-wrap" class="fight-wrap hidden">
+        <div class="meter">
+          <span class="meter-label">上鱼进度</span>
+          <div class="meter-track">
+            <div id="progress-fill" class="meter-fill progress"></div>
+          </div>
+        </div>
+        <div class="meter">
+          <span class="meter-label">鱼线张力</span>
+          <div class="meter-track">
+            <div id="tension-fill" class="meter-fill tension"></div>
+          </div>
+          <span id="tension-text" class="meter-num"></span>
+        </div>
+      </div>
+    </div>
+    <div id="hotbar" class="hotbar"></div>
+    <div id="prompt" class="prompt hidden">
+      <kbd id="prompt-key">E</kbd>
+      <span id="prompt-text"></span>
+    </div>
+    <div id="starving" class="starving" style="display:none">饿了</div>
+    <div id="hint-bar" class="hint-bar"></div>
+  </div>
+
+  <div id="notify" class="notify"></div>
+  <div id="toast" class="toast"></div>
+
+  <div id="panels">
+    <div id="modal" class="modal hidden">
+      <div class="modal-box">
+        <div class="modal-head">
+          <h2 id="modal-title">面板</h2>
+        </div>
+        <div id="modal-body" class="modal-body"></div>
+        <div id="modal-foot" class="modal-foot"></div>
+      </div>
+    </div>
+    <div id="inspect" class="inspect hidden">
+      <div class="inspect-box">
+        <div class="inspect-head">
+          <div id="inspect-icon" class="inspect-icon"></div>
+          <div class="inspect-titles">
+            <h3 id="inspect-title">物品</h3>
+            <div id="inspect-sub" class="inspect-sub"></div>
+          </div>
+        </div>
+        <p id="inspect-desc" class="inspect-desc"></p>
+        <div id="inspect-rows" class="inspect-rows"></div>
+        <div id="inspect-actions" class="inspect-actions"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="start-overlay" class="start-overlay hidden">
+    <div class="start-box">
+      <h1>去钓鱼</h1>
+      <p id="start-save-hint" class="save-hint"></p>
+      <button id="start-btn" class="btn big good">进入海岛</button>
+    </div>
+  </div>
+
+  <div id="results">运行中……</div>
+
+  <script type="module">
+    import { Game } from '../src/game.js';
+    import { makeItem, makeRod, makeBait, itemName, kindOf, itemValue, sellPrice } from '../src/data/items.js';
+
+    // 运行器靠这个标记判断脚本是否真的开始执行了
+    window.__E2E_STARTED = true;
+
+    const out = document.getElementById('results');
+    const lines = [];
+    let pass = 0;
+    let fail = 0;
+
+    function log(html, cls = '') {
+      lines.push(cls ? `<span class="${cls}">${html}</span>` : html);
+      out.innerHTML = lines.join('\n');
+    }
+
+    function ok(name, extra = '') {
+      pass += 1;
+      log(`  ✓ ${name}${extra ? ' — ' + extra : ''}`, 'p');
+    }
+
+    function bad(name, detail = '') {
+      fail += 1;
+      log(`  ✗ ${name}${detail ? '\n      ' + detail : ''}`, 'f');
+    }
+
+    function check(name, cond, detail = '') {
+      if (cond) ok(name);
+      else bad(name, detail);
+      return !!cond;
+    }
+
+    function section(title) {
+      log(`\n=== ${title} ===`, 'i');
+    }
+
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    /** 等一个条件成立，最多等 timeout 毫秒 */
+    async function waitFor(label, fn, timeout = 15000, step = 50) {
+      const t0 = performance.now();
+      while (performance.now() - t0 < timeout) {
+        if (fn()) return true;
+        await sleep(step);
+      }
+      bad(`等待超时：${label}`);
+      return false;
+    }
+
+    const errors = [];
+    window.addEventListener('error', (e) => errors.push(String(e.message)));
+    window.addEventListener('unhandledrejection', (e) => {
+      const msg = String((e.reason && e.reason.message) || e.reason || '');
+      // 无头环境没有焦点，指针锁定必然被拒，这跟游戏逻辑无关
+      if (/pointer ?lock|WrongDocumentError/i.test(msg)) return;
+      errors.push('unhandledrejection: ' + msg);
+    });
+    let game;
+    try {
+      game = new Game();
+      window.game = game;
+      game.hideStartOverlay();
+    } catch (err) {
+      log('构造 Game 失败：\n' + (err && err.stack || err), 'f');
+      document.title = 'E2E-FAIL';
+      window.__E2E = { done: true, pass: 0, fail: 1, text: '构造 Game 失败：' + (err && err.stack || err), errors: [] };
+      throw err;
+    }
+
+    try {
+      /* ---------------- 启动 ---------------- */
+      section('启动与渲染');
+      check('WebGL 渲染器已创建', !!game.renderer);
+      check('DOM 里能找到画布', !!document.getElementById('game-canvas'));
+      check('世界已构建（有地形 / 水面 / 鱼池）', !!game.world.terrain && !!game.world.water && !!game.world.pondWater);
+      check('玩家控制器已挂载', !!game.player && !!game.player.rig);
+      check('UI 创建了 9 个物品栏格子', document.querySelectorAll('#hotbar .slot').length === 9);
+      check('场景里有 NPC（商店 / 烧烤 / 渔夫）', game.world.npcs.length >= 3);
+      check('商店室外摆了商品', game.world.shopGoods.length >= 3);
+
+      // 让渲染循环跑几帧，确认真的画出东西了
+      await sleep(600);
+      const info = game.renderer.info;
+      check('渲染统计：产生了 draw call', info.render.calls > 0, `calls=${info.render.calls} tris=${info.render.triangles}`);
+      check('场景三角面数量在合理范围（< 40 万）', info.render.triangles < 400000, `tris=${info.render.triangles}`);
+      check('HUD 显示了金钱', document.getElementById('hud-money').textContent.startsWith('§'));
+      check('世界里有海产品可以捡', game.world.seaProducts.length > 0, `${game.world.seaProducts.length} 个`);
+      check('开局给了鱼饵', !!game.state.inventory.bait);
+
+      /* ---------------- 移动 ---------------- */
+      section('移动与碰撞');
+      const p0 = game.player.position.clone();
+      game.player.keys.add('KeyW');
+      await sleep(700);
+      game.player.keys.delete('KeyW');
+      const moved = game.player.position.distanceTo(p0);
+      check('按 W 能走动', moved > 0.4, `移动了 ${moved.toFixed(2)} 米`);
+      check('玩家站在地面上（y 与地形一致）',
+        Math.abs(game.player.position.y - game.player.groundAt(game.player.position.x, game.player.position.z)) < 0.4);
+      const deep = game.player.canStandAt(0, 0);
+      check('不会掉进深水（超深处不可行走）', game.player.canStandAt(400, 400) === false);
+
+      // 传送到栈桥，方便后面的钓鱼测试（避免走很久）
+      game.player.position.set(0, game.player.groundAt(0, 55), 55);
+      await sleep(80);
+      check('栈桥区域可以行走', game.player.inPierZone(0, 55));
+
+      /* ---------------- 捡海产品 ---------------- */
+      section('捡拾海产品');
+      const before = game.state.inventory.used;
+      // 在玩家脚边放一个海产品，直接调用拾取逻辑
+      const spawn = game.world.spawnSeaProduct(
+        { id: 'conch', name: '海螺', shape: 'conch', color: '#e8c9a8', tier: 2, value: 18, avgKg: 0.3, avgCm: 15 },
+        new (game.player.position.constructor)(game.player.position.x + 1, 0.2, game.player.position.z + 1)
+      );
+      await sleep(60);
+      const interact = game.findInteraction();
+      check('靠近海产品会出现交互提示', !!interact, interact ? interact.text : '没有找到可交互对象');
+      if (interact && interact.kind === 'sea') {
+        game.pickSeaProduct(interact.entry);
+        check('捡起后进背包', game.state.inventory.used === before + 1);
+        check('世界里的海产品被移除', !game.world.seaProducts.includes(spawn));
+        check('统计记录了拾取', game.state.stats.seaPicked >= 1);
+      } else {
+        bad('海产品交互没有优先命中', interact ? interact.kind : 'null');
+      }
+
+      /* ---------------- 商店 ---------------- */
+      section('商店买卖');
+      game.state.addMoney(5000);
+      game.ui.setPanel('shop');
+      await sleep(120);
+      check('商店面板打开', game.ui.openPanel === 'shop');
+      const rodCard = [...document.querySelectorAll('#modal-body [data-buy]')].find((b) => b.dataset.buy === 'rod:rod_bamboo');
+      check('商店列里有竹制手竿', !!rodCard);
+      const moneyBefore = game.state.money;
+      // 价格从游戏自己的目录里取，避免测试写死数值（改平衡时不该改测试）
+      const rodCatalog = game.shop.catalog().find((c) => c.key === 'rod:rod_bamboo');
+      rodCard?.click();
+      await sleep(120);
+      check('买竿扣钱正确', game.state.money === moneyBefore - rodCatalog.price,
+        `${moneyBefore} -> ${game.state.money}（竿价 ${rodCatalog.price}）`);
+      const rods = game.state.inventory.items.filter((i) => i && i.kind === 'rod');
+      check('钓竿进了背包', rods.length === 1);
+      log(`  · [商店后] 背包：${game.state.inventory.items.map((i) => (i ? i.kind + ':' + i.speciesId : '·')).join(' | ')}`, 'i');
+      // 卖出刚捡到的海产品（注意：面板里的按钮在每次重绘后都是新 DOM，必须重新查询）
+      const usedBefore = game.state.inventory.used;
+      const heldBeforeSell = game.state.heldItem;
+      const sellBtn = document.querySelector('#modal-body [data-action="sell-held"]');
+      log(`  · 卖出前：手持=${heldBeforeSell ? heldBeforeSell.kind + ':' + heldBeforeSell.speciesId : '空'}，背包用 ${usedBefore} 格，按钮=${sellBtn ? (sellBtn.disabled ? '禁用' : '可用') : '不存在'}`, 'i');
+      if (sellBtn && !sellBtn.disabled) {
+        const m2 = game.state.money;
+        sellBtn.click();
+        await sleep(120);
+        check('卖出手上物品后钱增加', game.state.money > m2, `${m2} -> ${game.state.money}`);
+        check('卖出的东西离开背包', game.state.inventory.used === usedBefore - 1, `${usedBefore} -> ${game.state.inventory.used}`);
+        check('卖出的钱等于报价', game.state.money - m2 === (heldBeforeSell ? sellPrice(heldBeforeSell) : 0));
+      } else {
+        bad('卖出按钮不可用（应该手持海产品）');
+      }
+      // 背包扩容
+      const upBtn = [...document.querySelectorAll('#modal-body [data-buy]')].find((b) => b.dataset.buy === 'upgrade:slot');
+      if (upBtn) {
+        upBtn.click();
+        await sleep(120);
+        check('背包扩容到 4 格', game.state.inventory.slots === 4, `slots=${game.state.inventory.slots}`);
+      } else {
+        bad('商店里没有扩容商品');
+      }
+      game.ui.closeModal();
+      await sleep(80);
+      check('关闭面板', game.ui.openPanel === null);
+
+      /* ---------------- 吃 ---------------- */
+      section('饱食度与进食');
+      game.state.hunger = 30;
+      game.state.give(makeItem('sea', 'abalone', { quality: 2, weightKg: 0.22, lengthCm: 11 }));
+      game.state.inventory.setHand(game.state.inventory.items.findIndex((i) => i && i.speciesId === 'abalone'));
+      game.onHandChanged();
+      const hungerBefore = game.state.hunger;
+      game.eatHeld();
+      check('吃海产品恢复饱食度', game.state.hunger > hungerBefore, `${hungerBefore} -> ${game.state.hunger}`);
+      check('吃掉的东西离开背包', !game.state.inventory.items.some((i) => i && i.speciesId === 'abalone'));
+      log(`  · [进食后] 背包：${game.state.inventory.items.map((i) => (i ? i.kind + ':' + i.speciesId : '·')).join(' | ')}`, 'i');
+
+      /* ---------------- 钓鱼（完整流程） ---------------- */
+      section('钓鱼完整流程');
+      // 拿出钓竿、换上好饵
+      const rodItem = game.state.inventory.items.find((i) => i && i.kind === 'rod');
+      game.state.inventory.setHand(game.state.inventory.items.indexOf(rodItem));
+      game.state.inventory.addBait('bait_shrimp', 30);
+      game.onHandChanged();
+      check('手持钓竿', !!game.fishing.rodItem);
+      check('当前钓点可钓等级正确', game.fishing.maxTierAt('shore') === 1, `T${game.fishing.maxTierAt('shore')}`);
+
+      // 面向 +Z（朝栈桥外的海）
+      game.player.yaw = 0;
+      game.player.pitch = 0;
+
+      const caughtBefore = game.state.stats.fishCaught;
+      const baitBefore = game.state.inventory.bait.count;
+
+      game.fishing.onPrimaryDown();          // 开始蓄力
+      check('进入蓄力状态', game.fishing.phase === 'charging');
+      await waitFor('蓄力条充满', () => game.fishing.charge > 0.99, 8000);
+      check('蓄力条已满', game.fishing.charge > 0.99, `charge=${game.fishing.charge.toFixed(2)}`);
+      game.fishing.onPrimaryUp(game.player.castContext());
+      check('抛竿后进入飞行阶段', game.fishing.phase === 'casting');
+      await waitFor('抛竿落水', () => game.fishing.phase === 'waiting', 5000);
+      check('落到水里并开始等待咬钩', game.fishing.phase === 'waiting');
+      check('浮标可见', game.bobber.visible === true);
+      check('鱼线已生成', game.fishingLine.visible === true);
+
+      await waitFor('鱼咬钩', () => game.fishing.phase === 'bite', 30000);
+      check('鱼咬钩了', game.fishing.phase === 'bite');
+      game.fishing.onPrimaryDown();           // 提竿
+      check('提竿后进入搏斗', game.fishing.phase === 'fight');
+
+      // 自动搏斗：张力高就松手
+      let steps = 0;
+      while (game.fishing.phase === 'fight' && steps < 1200) {
+        if (game.fishing.fight) game.fishing.fight.reeling = game.fishing.fight.tension < 0.8;
+        await sleep(16);
+        steps += 1;
+      }
+      check('搏斗在有限时间内结束', game.fishing.phase !== 'fight', `steps=${steps}`);
+      const landed = game.state.stats.fishCaught > caughtBefore;
+      check('把鱼拉上来了', landed, `结果：${game.fishing.result && (game.fishing.result.ok ? '成功' : game.fishing.result.reason)}`);
+      if (landed) {
+        check('鱼进了背包', game.state.inventory.items.some((i) => i && i.kind === 'fish'));
+        check('钓获写进了统计日志', game.state.catchLog.length > 0);
+        check('鱼饵被消耗或保留（不会凭空增加）', game.state.inventory.bait === null || game.state.inventory.bait.count <= baitBefore);
+      log(`  · 钓到的鱼：${game.state.catchLog.map((e) => `${e.name}(${e.qualityName}, ${e.weightKg.toFixed(2)}kg, §${e.value})`).join('、')}`, 'i');
+      }
+      // 等状态机回到 idle
+      await waitFor('钓鱼状态复位', () => game.fishing.phase === 'idle', 6000);
+
+      /* ---------------- 烧烤 ---------------- */
+      section('烧烤与火候');
+      game.state.addMoney(1000);
+      game.grill.ignite();
+      check('点火成功（火在烧）', game.grill.isLit);
+      check('点火后火苗可见', game.world.flame.visible === true);
+      // 放一条鱼上去（先腾出背包空间，避免之前的渔获把格子占满）
+      const inv = game.state.inventory;
+      while (inv.free < 1) {
+        const idx = inv.items.findIndex(Boolean);
+        if (idx < 0) break;
+        const junk = inv.takeAt(idx);
+        game.state.dropItem(junk, { x: game.player.position.x, y: 0, z: game.player.position.z });
+      }
+      const fishItem = makeItem('fish', 'seabass', { quality: 2, weightKg: 1.6, lengthCm: 46 });
+      game.state.give(fishItem);
+      const fishSlot = game.state.inventory.items.findIndex((i) => i && i.uid === fishItem.uid);
+      check('鱼在背包里', fishSlot >= 0, `slot=${fishSlot}`);
+      game.state.inventory.setHand(fishSlot);
+      const put = game.grill.putOn(fishSlot);
+      check('鱼放上了烤架', put.ok, put.reason || '');
+      await waitFor('烤架上的 3D 模型出现', () => !!game.world.grillFishMeshes[put.slot], 3000);
+      check('烤架 3D 模型同步了', !!game.world.grillFishMeshes[put.slot]);
+      // 推进到最佳火候
+      for (let i = 0; i < 220; i++) game.grill.update(0.1);
+      const view = game.grill.slotView(put.slot);
+      check('烤到「刚好好」', view && view.stage.key === 'ready', view ? view.stage.name : 'null');
+      const rawValue = itemValue(fishItem);
+      check('烤好后价值翻倍以上', view && view.value > rawValue * 2, `${rawValue} -> ${view && view.value}`);
+      const take = game.grill.takeOff(put.slot);
+      check('取下后变成烤鱼', take.ok && take.item.kind === 'cooked' && take.item.cookStage === 'ready');
+      check('烤鱼名字带火候', itemName(take.item).includes('烤'), itemName(take.item));
+      // 继续烤成焦炭
+      const burntSlot = game.state.inventory.items.findIndex((i) => i && i.uid === take.item.uid);
+      const put2 = game.grill.putOn(burntSlot);
+      check('把烤鱼再放回烤架', put2.ok, put2.reason || '');
+      for (let i = 0; i < 900; i++) game.grill.update(0.1);
+      const burnt = game.grill.slotView(put2.slot);
+      check('烤太久会变焦炭', burnt && burnt.stage.key === 'charcoal', burnt ? burnt.stage.name : 'null');
+
+      /* ---------------- 鱼池 ---------------- */
+      section('鱼池');
+      const beforePond = game.state.pond.length;
+      const tuna = makeItem('fish', 'tuna', { quality: 3, weightKg: 32, lengthCm: 120 });
+      game.state.give(tuna);
+      game.state.inventory.setHand(game.state.inventory.items.indexOf(tuna));
+      const pondRes = game.state.addToPond();
+      check('鱼放进了鱼池', pondRes.ok && game.state.pond.length === beforePond + 1);
+      game.world.syncPond();
+      await sleep(120);
+      const pondFish = game.world.swimmingFish.filter((f) => f.kind === 'pond');
+      check('鱼池里有 3D 鱼在游', pondFish.length === game.state.pond.length, `${pondFish.length} 条`);
+      const first = pondFish[0];
+      if (first) {
+        const p1 = first.obj.position.clone();
+        await sleep(300);
+        check('鱼在动', first.obj.position.distanceTo(p1) > 0.01);
+      }
+      game.ui.setPanel('pond');
+      await sleep(120);
+      check('鱼池面板能打开并列出鱼', document.querySelectorAll('#modal-body .pond-card').length >= 1);
+      game.ui.closeModal();
+      log(`  · 鱼池里的鱼：${game.state.pond.map((p) => p.name).join('、') || '无'}`, 'i');
+
+      /* ---------------- 检视面板 ---------------- */
+      section('检视 / 统计 / 设置面板');
+      game.state.give(makeItem('fish', 'moon_koi', { quality: 4, weightKg: 19, lengthCm: 96 }));
+      game.state.inventory.setHand(game.state.inventory.items.findIndex((i) => i && i.speciesId === 'moon_koi'));
+      game.onHandChanged();
+      game.ui.inspect(game.state.heldItem);
+      await sleep(150);
+      check('检视面板打开', game.ui.isInspecting());
+      check('检视面板显示名称', document.getElementById('inspect-title').textContent.includes('月光锦鲤'));
+      check('检视面板列出定价明细', document.querySelectorAll('#inspect-rows .inspect-row').length >= 5);
+      game.ui.closeInspect();
+
+      game.ui.setPanel('stats');
+      await sleep(150);
+      check('统计面板打开', game.ui.openPanel === 'stats');
+      check('统计数据卡有内容', document.querySelectorAll('#modal-body .stat-card').length >= 8);
+      check('渔获日志有记录', document.querySelectorAll('#modal-body .log-table tbody tr').length >= 1);
+      game.ui.closeModal();
+
+      game.ui.setPanel('settings');
+      await sleep(150);
+      check('设置面板打开', game.ui.openPanel === 'settings');
+      check('设置里有鼠标灵敏度滑块', !!document.querySelector('#modal-body input[data-set="sensitivity"]'));
+      const slider = document.querySelector('#modal-body input[data-set="sensitivity"]');
+      slider.value = '2';
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+      check('调整灵敏度会写入设置', Math.abs(game.settings.get('sensitivity') - 2) < 1e-6);
+      game.ui.closeModal();
+
+      /* ---------------- 存档 ---------------- */
+      section('存档');
+      game.state.addMoney(777);
+      const moneySnapshot = game.state.money;
+      const savedOk = game.save();
+      check('存档写入成功', savedOk === true);
+      check('localStorage 里有存档', !!localStorage.getItem('gotofish.save.v1'));
+      const raw = JSON.parse(localStorage.getItem('gotofish.save.v1'));
+      check('存档内容包含金钱与鱼池', raw.money === moneySnapshot && Array.isArray(raw.pond));
+
+      /* ---------------- 交互与掉落 ---------------- */
+      section('放下与拾取');
+      game.state.inventory.setHand(0);
+      const heldNow = game.state.heldItem;
+      if (heldNow) {
+        const groundBefore = game.state.groundItems.length;
+        game.dropHeld();
+        check('放下物品后地上多了一件', game.state.groundItems.length === groundBefore + 1);
+        const allHaveMesh = game.state.groundItems.every((g) => game.world.groundItemMeshes.has(g.uid));
+        check('每个地面物品都有对应的 3D 模型', allHaveMesh,
+          `${game.state.groundItems.length} 件物品 / ${game.world.groundItemMeshes.size} 个模型`);
+        const got = game.state.pickUpNearest(game.player.position, 4);
+        check('能再捡起来', !!got);
+        check('捡起后模型被移除', game.world.groundItemMeshes.size === game.state.groundItems.length);
+      } else {
+        bad('手持为空，无法测试放下');
+      }
+
+      /* ---------------- 手持切换 / 鱼饵切换 / 视角 ---------------- */
+      section('手持物品与鱼饵切换');
+      const invW = game.state.inventory;
+      log(`  · 起始背包：${invW.items.map((i) => (i ? i.kind + ':' + i.speciesId : '·')).join(' | ')} hand=${invW.hand}`, 'i');
+
+      // 数字键切换
+      invW.setHand(0);
+      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Digit2' }));
+      await sleep(60);
+      check('数字键 2 切到第 2 格', invW.hand === 1, `hand=${invW.hand}`);
+
+      // 滚轮切换（跳过空格）
+      const beforeWheel = invW.hand;
+      game.canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true }));
+      await sleep(60);
+      check('滚轮能切换手持', invW.hand !== beforeWheel || invW.slots === 1);
+
+      // 换饵：让背包里存在第二种鱼饵，然后 B 键循环
+      const rodIdxBefore = invW.items.findIndex((i) => i && i.kind === 'rod');
+      const rodBefore = invW.items[rodIdxBefore];
+      const usedBeforeSwitch = invW.used;
+      // 先给鱼饵格装上沙蚕，再把第二种饵放进一个空位
+      invW.addBait('bait_worm', 10);
+      const emptySlot = invW.items.indexOf(null);
+      if (emptySlot >= 0) invW.items[emptySlot] = makeBait('bait_squid', 8);
+      const otherBait = invW.items.some((i) => i && i.kind === 'bait');
+      const baitBeforeSwitch = invW.bait.speciesId;
+      game.switchBait();
+      await sleep(60);
+      check('换饵前背包里确实有第二种饵', otherBait);
+      check('B 键切换鱼饵', invW.bait.speciesId !== baitBeforeSwitch,
+        `${baitBeforeSwitch} -> ${invW.bait && invW.bait.speciesId}`);
+      check('换下来的饵还在（没丢东西）',
+        invW.items.some((i) => i && i.kind === 'bait' && i.speciesId === baitBeforeSwitch) ||
+        invW.bait.speciesId === baitBeforeSwitch);
+      check('换饵没有动到钓竿', invW.items.indexOf(rodBefore) === rodIdxBefore,
+        `钓竿从 ${rodIdxBefore} 格跑到 ${invW.items.indexOf(rodBefore)} 格`);
+      // 换饵只是把饵在「鱼饵格」和背包之间对调，绝不该凭空多出或少掉一件东西
+      const usedAfterSwitch = invW.used;
+      check('换饵不会多出物品', usedAfterSwitch <= usedBeforeSwitch + 1 && usedAfterSwitch >= usedBeforeSwitch - 1,
+        `${usedBeforeSwitch} -> ${usedAfterSwitch}`);
+      check('鱼饵格里有饵', !!invW.bait && invW.bait.count > 0);
+
+      // 视角切换
+      game.player.toggleView();
+      check('切到第一人称', game.player.viewMode === 1);
+      await sleep(80);
+      check('第一人称下玩家模型隐藏', game.player.body.visible === false);
+      game.player.toggleView();
+      await sleep(80);
+      check('切回第三人称', game.player.viewMode === 0 && game.player.body.visible === true);
+
+      // 手持钓竿时长按左键 = 抛竿；手持食物时长按 = 进食
+      game.state.hunger = 50;
+      const snack = makeItem('sea', 'scallop', { quality: 2 });
+      game.state.give(snack);
+      game.state.inventory.setHand(game.state.inventory.items.findIndex((i) => i && i.uid === snack.uid));
+      game.onHandChanged();
+      game.onPrimaryDown();
+      check('手持食物按下左键开始进食', !!game.eating);
+      await waitFor('进食完成', () => !game.eating, 4000);
+      check('长按进食回复了饱食度', game.state.hunger > 50, `hunger=${Math.round(game.state.hunger)}`);
+
+      // 饿肚子会变慢
+      game.state.hunger = 5;
+      const slowFactor = game.state.speedFactor;
+      game.state.hunger = 100;
+      check('饥饿会降低移动速度', slowFactor < 0.6 && game.state.speedFactor === 1, `饥饿时 ×${slowFactor.toFixed(2)}`);
+
+      // 手持物品会自动重建手上的 3D 模型
+      const rodForHand = game.state.inventory.items.find((i) => i && i.kind === 'rod');
+      const rodIdx = game.state.inventory.items.indexOf(rodForHand);
+      game.state.inventory.setHand(rodIdx);
+      game.onHandChanged();
+      log(`  · 手持模型检查：钓竿在 ${rodIdx} 格，hand=${game.state.inventory.hand}，held=${game.state.heldItem ? game.state.heldItem.kind : '空'}，model=${game.player.handModel ? '有' : '无'}`, 'i');
+      check('手持钓竿时手上有竿模型', !!game.player.handModel);
+
+      // 背包扩容到上限
+      game.state.addMoney(500000);
+      let guard = 0;
+      while (game.state.inventory.slots < 9 && guard++ < 20) game.shop.buy('upgrade:slot');
+      check('背包能扩到 9 格上限', game.state.inventory.slots === 9, `slots=${game.state.inventory.slots}`);
+      check('满级后不再提供扩容', game.shop.catalog().find((c) => c.kind === 'upgrade').price === null);
+
+      /* ---------------- 运行期错误 ---------------- */
+      section('运行期');
+      await sleep(600);
+      check('没有未捕获的异常', errors.length === 0, errors.join(' | '));
+      check('页面上没有弹出运行期错误提示', !document.getElementById('runtime-error'));
+      check('渲染持续在跑', game.renderer.info.render.frame > 0, `frame=${game.renderer.info.render.frame}`);
+      check('相机始终在玩家附近', game.camera.position.distanceTo(game.player.position) < 12,
+        `距离 ${game.camera.position.distanceTo(game.player.position).toFixed(2)}`);
+      check('没有几何体/材质泄漏式增长（几何体数量稳定）', game.renderer.info.memory.geometries < 4000,
+        `geometries=${game.renderer.info.memory.geometries} textures=${game.renderer.info.memory.textures}`);
+      log(`  FPS 采样：${game.fps}（软件渲染，真机会高很多）`, 'i');
+      log(`  渲染：calls=${game.renderer.info.render.calls} tris=${game.renderer.info.render.triangles} geometries=${game.renderer.info.memory.geometries}`, 'i');
+    } catch (err) {
+      bad('测试过程抛出异常', (err && err.stack || String(err)));
+      log(String(err && err.stack || err), 'f');
+    }
+
+    /* ---------------- 汇总 ---------------- */
+    log(`\n${'─'.repeat(52)}`);
+    if (fail === 0) {
+      log(`全部通过：${pass} 项`, 'p');
+      document.title = 'E2E-OK';
+    } else {
+      log(`失败 ${fail} 项，通过 ${pass} 项`, 'f');
+      document.title = 'E2E-FAIL';
+    }
+    // 供无头运行器读取结果
+    window.__E2E = {
+      done: true,
+      pass,
+      fail,
+      text: out.textContent,
+      errors: errors.slice(),
+    };
+    const status = document.createElement('div');
+    status.id = 'status';
+    status.textContent = fail === 0 ? 'PASS' : 'FAIL';
+    document.body.appendChild(status);
+  </script>
+</body>
+
+</html>

@@ -1,0 +1,17 @@
+# 统一用 LF 换行：仓库里大部分是 JS/HTML/CSS，混着 CRLF 会让 diff 变得很难看。
+# 二进制资源不碰。
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.zip binary
+
+# vendored 代码：不要在 diff 里显示（体积大、不是我们写的）
+vendor/three.module.js linguist-vendored
+vendor/three.module.js -diff
