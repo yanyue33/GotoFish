@@ -84,8 +84,19 @@ async function main() {
     process.exit(0);
   }
 
-  const { server, port } = await startStaticServer();
-  const origin = `http://127.0.0.1:${port}`;
+  // GOTOFISH_URL：直接验收一个已经部署好的线上地址（例如 GitHub Pages），
+  // 这时不需要本地服务器。
+  const remoteUrl = process.env.GOTOFISH_URL || null;
+  let origin;
+  let server = null;
+  if (remoteUrl) {
+    origin = remoteUrl.replace(/\/$/, '');
+    console.log(`验收线上地址：${origin}`);
+  } else {
+    const started = await startStaticServer();
+    server = started.server;
+    origin = `http://127.0.0.1:${started.port}`;
+  }
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'gotofish-boot-'));
   const debugPort = 9900 + Math.floor(Math.random() * 90);
 
@@ -103,7 +114,7 @@ async function main() {
 
   const cleanup = () => {
     try { child.kill(); } catch { /* ignore */ }
-    server.close();
+    server?.close();
   };
 
   let ws;

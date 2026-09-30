@@ -1,7 +1,14 @@
 # 去钓鱼 · GotoFish
 
+**在线直接玩：<https://yanyue33.github.io/GotoFish/>**
+
 一款**低多边形 3D 海岛钓鱼休闲游戏**。开局一无所有，在海滩上捡贝壳海螺攒钱，
 买钓竿、买鱼饵，钓遍从螃蟹龙虾到月光锦鲤的 34 种鱼，烤鱼卖钱，把喜欢的鱼养在岛中央的鱼池里。
+
+[![在线试玩](https://img.shields.io/badge/在线试玩-yanyue33.github.io%2FGotoFish-57b8e8?style=flat-square)](https://yanyue33.github.io/GotoFish/)
+[![测试](https://img.shields.io/badge/测试-104%20单元%20%2B%2012%20启动%20%2B%2099%20端到端%20%2B%2018%20离线-6fdc8c?style=flat-square)](#验证与测试)
+[![依赖](https://img.shields.io/badge/运行时依赖-0%20（仅%20vendored%20three.js）-ffd24a?style=flat-square)](vendor/README.md)
+[![许可](https://img.shields.io/badge/license-MIT-9fb2c2?style=flat-square)](LICENSE)
 
 ![栈桥钓鱼](docs/screenshot.png)
 
@@ -186,7 +193,7 @@ zip 里包含运行必需的文件 + 一份 `怎么打开.txt` + `启动本地�
 
 | 平台 | 做法 |
 | --- | --- |
-| **GitHub Pages** | 把仓库推到 GitHub → Settings → Pages → Source 选 `main` 分支根目录 → 得到 `https://<用户名>.github.io/<仓库名>/` |
+| **GitHub Pages** | **本项目已经配好了**：<https://yanyue33.github.io/GotoFish/> 。换仓库的话：Settings → Pages → Source 选 `main` 分支根目录。注意 GitHub Free 只能在<u>公开仓库</u>上开 Pages |
 | **Netlify Drop** | 打开 [app.netlify.com/drop](https://app.netlify.com/drop)，把整个项目文件夹拖进去，立刻得到一个网址（不用注册也能先试） |
 | **Cloudflare Pages / Vercel** | 连 Git 仓库，Build command 留空，Output directory 填 `/`（或项目根） |
 | **itch.io** | 新建项目 → Kind 选 HTML → 把项目文件打成 zip 上传 → 勾选 "This file will be played in the browser" |
